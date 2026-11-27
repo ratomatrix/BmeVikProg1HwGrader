@@ -1,0 +1,16 @@
+# Student submissions and generated grading reports (keep private, track empty folders via .gitkeep)
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Compiled C test binaries
+*.exe
+
+# OS / Editor
+Thumbs.db
