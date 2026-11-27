@@ -36,7 +36,7 @@ Iterate over every non-hidden subfolder `input/<student_folder>/` (skipping any 
    - Inspect the C source files manually (Section 1.B of `grading-checklist-and-rubric.md`, including **AI-generated code indicators**).
    - Inspect the documentation (`.pdf`, `.docx`, or `.zip` Doxygen HTML) against Section 2.
    - Apply the 10-point rubric (Section 3).
-2. Save the student's report to `output/<student_folder>.md`.
+2. Save the student's report to `output/<student_folder>.md` (or `output/<student_folder>_<Student_Name>.md` if `<student_folder>` does not contain the student's name in any way and the name is known).
 
 > [!TIP]
 > If your AI agent supports parallel subagents, you may run independent `grade-student` evaluations concurrently; otherwise, process them sequentially in a loop.

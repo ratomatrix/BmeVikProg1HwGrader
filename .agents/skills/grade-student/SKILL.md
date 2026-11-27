@@ -17,7 +17,7 @@ Evaluate a student's submission folder (C sources, test data, and documentation)
 ## Workflow
 
 > [!IMPORTANT]
-> **Overwrite Guard:** Before starting or saving the report, check whether `output/<student_folder>.md` (or the target report file) already exists. If it does, **stop and ask the user for confirmation** before overwriting it (unless the user already explicitly asked to overwrite/re-grade).
+> **Overwrite Guard:** Before starting or saving the report, check whether the target report file (`output/<student_folder>.md`, or `output/<student_folder>_<Student_Name>.md` if `<student_folder>` does not contain the student's name) already exists. If it does, **stop and ask the user for confirmation** before overwriting it (unless the user already explicitly asked to overwrite/re-grade).
 
 ### 1. Run Automated Checks
 Execute [check_submission.py](./scripts/check_submission.py) on the student's folder (typically located under `input/<student_folder>`):
@@ -33,7 +33,7 @@ Useful flags:
 - `--timeout 10` — Execution timeout in seconds (default: 10).
 
 Review the script's output for:
-- File inventory (`.c`/`.h`, `.txt`, `.pdf`/`.docx`/`.zip` documentation).
+- File inventory (`.c`/`.h`, `.txt`, `.pdf`/`.docx`/`.zip` documentation; `.zip` archives containing `.c`/`.h` sources are automatically extracted to a temporary directory for checking, and `stdinput.txt`/`stdin.txt` is auto-fed to Valgrind when no `--stdin-*` flag is given).
 - MinGW GCC compilation status and warnings.
 - WSL2 `gcc` + `valgrind` memory-leak and error summary.
 - Static heuristic flags (e.g., `realloc`, `rewind`, `fseek(..., SEEK_END)`, `gets`, `conio.h`, `main()` length, `fopen`/`fclose` balance, comment ratio).
@@ -59,10 +59,13 @@ Apply the **10-point rubric** in **Section 3** of [grading-checklist-and-rubric.
 2. Verify **Base 4 Points** criteria.
 3. Score the **Remaining 6 Points** (capping Documentation Quality at **max 2 points**).
 4. Summarize:
-   - **Student & Topic** (student name/identifier and homework topic).
+   - **Submitter** (student name and 6-character Neptun code; if not found in the submission, note `Unknown (not specified)`).
+   - **Topic** (homework topic).
    - **Total Score (X / 10)** and Pass/Fail status (min 4 to pass).
    - **AI-Authorship Suspicion Highlight** (whenever suspicious): Place a prominent callout/section (e.g., `> [!WARNING] Suspected AI-Generated Code`) near the top of the report detailing the exact files, line ranges, and constructs/style patterns that appear AI-written or too advanced for a 1st-year student.
    - **Automated Check Results** (MinGW, Valgrind, static flags).
    - **Code & Documentation Findings** (strengths, deductions, and issues to fix).
    - **Suggested Defense (*Védés*) Questions** tailored to the student's implementation (including targeted authorship-verification questions for any AI-flagged constructs).
-5. Save the grading report as `output/<student_folder>.md` (creating `output/` if it does not exist) unless the user specifies a different output path or asks for chat-only output.
+5. Save the grading report under `output/` (creating `output/` if it does not exist) unless the user specifies a different output path or asks for chat-only output:
+   - Follow the input folder name: `output/<student_folder>.md`.
+   - If `<student_folder>` does not contain the student's name in any way (and the student's name is known), append the student's name using underscore(s) (e.g., `output/1_Kiss_Peter.md`).

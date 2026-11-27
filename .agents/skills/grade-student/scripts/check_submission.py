@@ -21,6 +21,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -160,13 +162,16 @@ def check_mingw(
 
 
 def to_wsl_path(win_path: Path) -> str:
-    """Convert a Windows path to a WSL /mnt/... path using wslpath."""
-    rc, out, _, _ = run_cmd(["wsl", "wslpath", "-a", str(win_path.resolve())])
+    """Convert a Windows path to a WSL /mnt/... path."""
+    resolved = win_path.resolve()
+    if resolved.drive:
+        drive = resolved.drive.rstrip(":").lower()
+        rest = resolved.as_posix().split(":", 1)[-1]
+        return f"/mnt/{drive}{rest}"
+    rc, out, _, _ = run_cmd(["wsl", "wslpath", "-a", str(resolved)])
     if rc == 0 and out.strip():
         return out.strip()
-    drive = win_path.resolve().drive.rstrip(":").lower()
-    rest = win_path.resolve().as_posix().split(":", 1)[-1]
-    return f"/mnt/{drive}{rest}"
+    return resolved.as_posix()
 
 
 def parse_valgrind(stderr: str) -> dict[str, Any]:
@@ -183,40 +188,47 @@ def parse_valgrind(stderr: str) -> dict[str, Any]:
 
 
 def check_wsl_valgrind(
-    sub_dir: Path,
     c_files: list[Path],
+    h_files: list[Path],
+    txt_files: list[Path],
     cli_args: list[str],
     stdin_bytes: bytes | None,
     include_dir: Path | None,
     timeout: int,
 ) -> dict[str, Any]:
-    """Copy submission to a temp WSL dir, run dos2unix, compile with gcc, and run Valgrind."""
+    """Stage sources/data in an ASCII temp dir, copy to WSL, compile, and run Valgrind."""
     if not c_files:
         return {"status": "SKIP", "reason": "No .c files found"}
 
-    wsl_sub = to_wsl_path(sub_dir)
-    wsl_inc = to_wsl_path(include_dir) if include_dir else None
+    with tempfile.TemporaryDirectory(prefix="prog1_wsl_stage_") as stage_dir:
+        stage_path = Path(stage_dir)
+        for f in [*c_files, *h_files, *txt_files]:
+            shutil.copy2(f, stage_path / f.name)
 
-    c_names = " ".join(shlex.quote(f.name) for f in c_files)
-    inc_flag = f"-I{shlex.quote(wsl_inc)}" if wsl_inc else ""
-    args_str = " ".join(shlex.quote(a) for a in cli_args)
+        wsl_stage = to_wsl_path(stage_path)
+        wsl_inc = to_wsl_path(include_dir) if include_dir else None
 
-    compile_script = (
-        f"set -e; "
-        f"WORK=$(mktemp -d /tmp/prog1_vg_XXXXXX); "
-        f"trap 'rm -rf \"$WORK\"' EXIT; "
-        f"cp -r {shlex.quote(wsl_sub)}/. \"$WORK/\"; "
-        f"cd \"$WORK\"; "
-        f"if command -v dos2unix >/dev/null 2>&1; then dos2unix -q *.txt 2>/dev/null || true; fi; "
-        f"gcc -Wall -Wextra -g -O0 {inc_flag} {c_names} -o hazi_vg -lm; "
-        f"valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=42 ./hazi_vg {args_str}"
-    )
+        c_names = " ".join(shlex.quote(f.name) for f in c_files)
+        inc_flag = f"-I{shlex.quote(wsl_inc)}" if wsl_inc else ""
+        args_str = " ".join(shlex.quote(a) for a in cli_args)
 
-    rc, out, err, timed_out = run_cmd(
-        ["wsl", "bash", "-lc", compile_script],
-        input_bytes=stdin_bytes,
-        timeout=timeout,
-    )
+        wsl_work = f"/tmp/prog1_vg_{uuid.uuid4().hex[:8]}"
+        compile_script = (
+            f"set -e; "
+            f"mkdir -p {wsl_work}; "
+            f"trap 'rm -rf {wsl_work}' EXIT; "
+            f"cp -r {shlex.quote(wsl_stage)}/. {wsl_work}/; "
+            f"cd {wsl_work}; "
+            f"if command -v dos2unix >/dev/null 2>&1; then dos2unix -q *.txt 2>/dev/null || true; fi; "
+            f"gcc -Wall -Wextra -g -O0 {inc_flag} {c_names} -o hazi_vg -lm; "
+            f"valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=42 ./hazi_vg {args_str}"
+        )
+
+        rc, out, err, timed_out = run_cmd(
+            ["wsl", "bash", "-lc", compile_script],
+            input_bytes=stdin_bytes,
+            timeout=timeout,
+        )
 
     if timed_out:
         return {"status": "TIMEOUT", "timeout_seconds": timeout, "stdout": out, "stderr": err}
@@ -300,6 +312,34 @@ def convert_docx_to_pdf(doc_files: list[Path], timeout: int = 30) -> list[dict[s
     return results
 
 
+def extract_source_zips(sub_dir: Path, extract_root: Path) -> tuple[list[Path], list[Path], list[Path], list[str]]:
+    """Extract any .zip archives in sub_dir that contain .c/.h source files."""
+    extracted_zips: list[str] = []
+    for zp in sorted(sub_dir.glob("*.zip")):
+        try:
+            with zipfile.ZipFile(zp) as zf:
+                members = [
+                    m for m in zf.namelist()
+                    if not m.endswith("/") and "__MACOSX" not in Path(m).parts
+                ]
+                has_c_sources = any(Path(m).suffix.lower() in {".c", ".h"} for m in members)
+                if has_c_sources:
+                    target = extract_root / zp.stem
+                    target.mkdir(parents=True, exist_ok=True)
+                    zf.extractall(target)
+                    extracted_zips.append(zp.name)
+        except zipfile.BadZipFile:
+            continue
+
+    if not extracted_zips:
+        return [], [], [], []
+
+    c_files = sorted(p for p in extract_root.rglob("*.c") if "__MACOSX" not in p.parts)
+    h_files = sorted(p for p in extract_root.rglob("*.h") if "__MACOSX" not in p.parts)
+    txt_files = sorted(p for p in extract_root.rglob("*.txt") if "__MACOSX" not in p.parts)
+    return c_files, h_files, txt_files, extracted_zips
+
+
 def print_human_report(report: dict[str, Any]) -> None:
     """Print a concise human-readable summary of all checks."""
     inv = report["inventory"]
@@ -308,6 +348,10 @@ def print_human_report(report: dict[str, Any]) -> None:
     print(f"Headers (.h): {', '.join(inv['h_files']) or 'none'}")
     print(f"Text data (.txt): {', '.join(inv['txt_files']) or 'NONE'}")
     print(f"Docs (.pdf/.docx/.zip): {', '.join(inv['doc_files']) or 'NONE'}")
+    if inv.get("extracted_source_zips"):
+        print(f"  [ZIP->SRC] Extracted source archive(s): {', '.join(inv['extracted_source_zips'])}")
+    if report.get("auto_stdin_file"):
+        print(f"  [Auto stdin] Using {report['auto_stdin_file']}")
     for conv in report.get("docx_conversion", []):
         print(f"  [DOCX->PDF] {conv['docx']} -> {conv['pdf']}: {conv['status']}")
 
@@ -362,48 +406,67 @@ def main() -> int:
         print(f"Error: not a directory: {sub_dir}", file=sys.stderr)
         return 2
 
-    c_files = sorted(sub_dir.glob("*.c"))
-    h_files = sorted(sub_dir.glob("*.h"))
-    txt_files = sorted(sub_dir.glob("*.txt"))
-    doc_files = sorted([*sub_dir.glob("*.pdf"), *sub_dir.glob("*.docx"), *sub_dir.glob("*.zip")])
-    docx_conversion = [] if args.no_docx_convert else convert_docx_to_pdf(doc_files)
-    if docx_conversion:
+    with tempfile.TemporaryDirectory(prefix="prog1_zip_") as zip_tmp:
+        c_files = sorted(sub_dir.glob("*.c"))
+        h_files = sorted(sub_dir.glob("*.h"))
+        txt_files = sorted(sub_dir.glob("*.txt"))
+        extracted_zips: list[str] = []
+        if not c_files:
+            zc, zh, zt, extracted_zips = extract_source_zips(sub_dir, Path(zip_tmp))
+            if zc:
+                c_files = zc
+                h_files = sorted({*h_files, *zh})
+                txt_files = sorted({*txt_files, *zt})
+
         doc_files = sorted([*sub_dir.glob("*.pdf"), *sub_dir.glob("*.docx"), *sub_dir.glob("*.zip")])
+        docx_conversion = [] if args.no_docx_convert else convert_docx_to_pdf(doc_files)
+        if docx_conversion:
+            doc_files = sorted([*sub_dir.glob("*.pdf"), *sub_dir.glob("*.docx"), *sub_dir.glob("*.zip")])
 
-    include_dir = args.include_dir
-    if include_dir is None:
-        default_inc = Path(__file__).resolve().parents[4] / "grading_includes"
-        if default_inc.is_dir():
-            include_dir = default_inc
+        include_dir = args.include_dir
+        if include_dir is None:
+            default_inc = Path(__file__).resolve().parents[4] / "grading_includes"
+            if default_inc.is_dir():
+                include_dir = default_inc
 
-    stdin_bytes: bytes | None = None
-    if args.stdin_file:
-        stdin_bytes = args.stdin_file.read_bytes()
-    elif args.stdin_text is not None:
-        stdin_bytes = args.stdin_text.encode("utf-8")
+        stdin_bytes: bytes | None = None
+        auto_stdin_file: str | None = None
+        if args.stdin_file:
+            stdin_bytes = args.stdin_file.read_bytes()
+        elif args.stdin_text is not None:
+            stdin_bytes = args.stdin_text.encode("utf-8")
+        else:
+            for candidate_name in ("stdinput.txt", "stdin.txt"):
+                match = next((p for p in txt_files if p.name.lower() == candidate_name), None)
+                if match is not None:
+                    stdin_bytes = match.read_bytes()
+                    auto_stdin_file = match.name
+                    break
 
-    report: dict[str, Any] = {
-        "submission_dir": str(sub_dir),
-        "inventory": {
-            "c_files": [p.name for p in c_files],
-            "h_files": [p.name for p in h_files],
-            "txt_files": [p.name for p in txt_files],
-            "doc_files": [p.name for p in doc_files],
-        },
-        "docx_conversion": docx_conversion,
-        "static_scan": scan_c_files(c_files, h_files),
-        "mingw": check_mingw(c_files, h_files, include_dir),
-        "wsl_valgrind": (
-            {"status": "SKIP", "reason": "--skip-wsl"}
-            if args.skip_wsl
-            else check_wsl_valgrind(sub_dir, c_files, args.args, stdin_bytes, include_dir, args.timeout)
-        ),
-    }
+        report: dict[str, Any] = {
+            "submission_dir": str(sub_dir),
+            "inventory": {
+                "c_files": [p.name for p in c_files],
+                "h_files": [p.name for p in h_files],
+                "txt_files": [p.name for p in txt_files],
+                "doc_files": [p.name for p in doc_files],
+                "extracted_source_zips": extracted_zips,
+            },
+            "auto_stdin_file": auto_stdin_file,
+            "docx_conversion": docx_conversion,
+            "static_scan": scan_c_files(c_files, h_files),
+            "mingw": check_mingw(c_files, h_files, include_dir),
+            "wsl_valgrind": (
+                {"status": "SKIP", "reason": "--skip-wsl"}
+                if args.skip_wsl
+                else check_wsl_valgrind(c_files, h_files, txt_files, args.args, stdin_bytes, include_dir, args.timeout)
+            ),
+        }
 
-    if args.json:
-        print(json.dumps(report, indent=2))
-    else:
-        print_human_report(report)
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print_human_report(report)
 
     return 0
 
