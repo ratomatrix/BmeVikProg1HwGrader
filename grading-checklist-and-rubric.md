@@ -122,6 +122,10 @@ Documentation is submitted as a **PDF**, **DOCX**, or a **ZIP containing Doxygen
 
 ## 3. Grading / Pointing Guideline (Max: 10 Points, Pass: 4 Points)
 
+> [!NOTE]
+> **Grading Philosophy (Proportionality & Pedagogical Intent):**
+> Do **not** apply this rubric overly rigidly. The goal is to verify that a 1st-year student genuinely understands and can apply the core course concepts (file I/O, dynamic memory/data structures, decomposition, and memory safety). If a requirement is only partially applied—for example, if the main data is stored in a proper linked list or dynamic structure while a secondary/auxiliary part uses a simpler approach, or if minor stylistic/edge-case flaws exist—**still award the corresponding points** when it is clear the student grasps the underlying concept, and document the gap as a **constructive remark** (with at most a modest quality-point deduction where appropriate) rather than failing the submission. Reserve hard-gate failures for genuinely missing core requirements (e.g., no real dynamic data structure anywhere, no file handling, crashes, or unverified authorship).
+
 ### A. Hard Gates (Must Pass Before Full Pointing)
 - **Does not compile** with MinGW GCC (or crashes immediately on startup) → **Reject / 0 points** (cannot defend until fixed; student may need resubmission / *pótlás*).
 - **Completely uncommented code** → **Do not accept**.
